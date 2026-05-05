@@ -1,92 +1,90 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
-from sklearn.pipeline import Pipeline
+from sklearn.metrics import (
+    mean_absolute_error, median_absolute_error, mean_squared_error, r2_score,
+    balanced_accuracy_score, precision_score, recall_score, f1_score, silhouette_score,
+    davies_bouldin_score, calinski_harabasz_score
+)
 
-def evaluate_regression(model, X_test: pd.DataFrame, y_test: pd.Series, is_log_transformed: bool = True):
+def evaluate_regression(y_true, y_pred, n_features, is_log_transformed=True):
     """
-    Predicts financial/count outcomes and reverses log-transformations 
-    to provide metrics in their actual econometric scale (Euros, Bidders).
+    Calculates regression metrics with a focus on robustness.
+    
+    Domain Knowledge:
+    - Median Absolute Error (MedAE) is preferred over MAE as contract prices 
+      in TED data feature extreme outliers that would skew standard averages.
     """
-    print("\\nEvaluating Regression Model...")
-    preds_log = model.predict(X_test)
-    r2 = r2_score(y_test, preds_log)
-    
-    # Reverse log1p for interpretability
-    y_test_orig = np.expm1(y_test)
-    preds_orig = np.expm1(preds_log)
-    preds_orig = np.maximum(0, preds_orig) # Physical boundary constraint
-    
-    rmse = np.sqrt(mean_squared_error(y_test_orig, preds_orig))
-    mae = mean_absolute_error(y_test_orig, preds_orig)
-    
-    print(f" -> R² Score (Log-Scale): {r2:.4f}")
-    print(f" -> RMSE (Original Scale): {rmse:,.2f}")
-    print(f" -> MAE  (Original Scale): {mae:,.2f}")
-    return preds_orig
+    y_t = np.expm1(y_true) if is_log_transformed else y_true
+    y_p = np.expm1(y_pred) if is_log_transformed else y_pred
 
-def evaluate_classification(model, X_test: pd.DataFrame, y_test: pd.Series):
-    """
-    Evaluates binary outcomes (e.g., Single Bidding risk) and plots the Confusion Matrix.
-    """
-    print("\\nEvaluating Classification Model...")
-    preds = model.predict(X_test)
+    mae = mean_absolute_error(y_t, y_p)
+    medae = median_absolute_error(y_t, y_p)
+    rmse = np.sqrt(mean_squared_error(y_t, y_p))
+    r2 = r2_score(y_t, y_p)
     
-    print(f" -> Accuracy:  {accuracy_score(y_test, preds):.4f}")
-    print(f" -> Precision: {precision_score(y_test, preds):.4f}")
-    print(f" -> Recall:    {recall_score(y_test, preds):.4f}")
-    print(f" -> F1-Score:  {f1_score(y_test, preds):.4f}")
+    # Adjust R-squared for feature count to identify potential over-specification
+    adj_r2 = 1 - (1 - r2) * (len(y_t) - 1) / (len(y_t) - n_features - 1)
     
-    cm = confusion_matrix(y_test, preds, normalize='true')
-    plt.figure(figsize=(5, 4))
-    sns.heatmap(cm, annot=True, fmt='.2%', cmap='Blues', 
-                xticklabels=['Normal', 'Single Bid'], 
-                yticklabels=['Normal', 'Single Bid'])
-    plt.title("Confusion Matrix (True Rates)")
-    plt.ylabel("Actual Reality")
-    plt.xlabel("Model Prediction")
-    plt.tight_layout()
-    plt.show()
+    print("\n--- Regression Results ---")
+    print(f"MedAE (Robust): €{medae:,.2f}")
+    print(f"MAE:            €{mae:,.2f}")
+    print(f"RMSE:           €{rmse:,.2f}")
+    print(f"Adj. R-squared: {adj_r2:.4f}")
+    
+    return {'medae': medae, 'adj_r2': adj_r2}
 
-def plot_feature_importance(model, feature_names: list, top_n: int = 15, title: str = "Feature Importance"):
+def evaluate_classification(y_true, y_pred):
     """
-    Extracts and visualizes the most influential features. Safely handles 
-    sklearn Pipelines by extracting the underlying model step.
-    """
-    # Extract underlying model if wrapped in an imputation/scaling pipeline
-    core_model = model.named_steps['model'] if isinstance(model, Pipeline) else model
+    Calculates classification metrics for binary tasks.
     
-    # Trees use feature_importances_, Linear models use coef_
-    if hasattr(core_model, 'feature_importances_'):
-        importance = core_model.feature_importances_
-    elif hasattr(core_model, 'coef_'):
-        importance = np.abs(core_model.coef_[0] if core_model.coef_.ndim > 1 else core_model.coef_)
-    else:
-        print("Model does not support feature importance extraction.")
-        return
+    Domain Knowledge:
+    - Balanced Accuracy is critical as 'Market Failure' classes are often 
+      unbalanced (fewer competitive tenders than single bids).
+    """
+    results = {
+        'bal_acc': balanced_accuracy_score(y_true, y_pred),
+        'f1': f1_score(y_true, y_pred, zero_division=0),
+        'precision': precision_score(y_true, y_pred, zero_division=0),
+        'recall': recall_score(y_true, y_pred, zero_division=0)
+    }
+    
+    print("\n--- Classification Results ---")
+    print(f"Balanced Acc: {results['bal_acc']:.4f}")
+    print(f"F1-Score:     {results['f1']:.4f}")
+    print(f"Precision:    {results['precision']:.4f}")
+    print(f"Recall:       {results['recall']:.4f}")
+    
+    return results
 
-    df_imp = pd.DataFrame({'Feature': feature_names, 'Importance': importance})
-    df_imp = df_imp.sort_values(by='Importance', ascending=True).tail(top_n)
-    
-    plt.figure(figsize=(10, 6))
-    plt.barh(df_imp['Feature'], df_imp['Importance'], color='#2c3e50')
-    plt.title(f"{title} (Top {top_n})")
-    plt.xlabel("Relative Importance / Absolute Coefficient")
-    plt.tight_layout()
-    plt.show()
-
-def analyze_cluster_profiles(df_original: pd.DataFrame, cluster_labels: np.ndarray):
+def evaluate_clustering(X_processed, labels, sample_size=20000):
     """
-    Calculates the mean values of key features for each identified cluster 
-    to assign economic meaning (e.g., 'High-Value Infrastructure' vs 'Local Services').
+    Evaluates cluster density and separation using multiple scientific metrics.
+    Calculations are sampled to ensure fast execution on large datasets.
     """
-    df_temp = df_original.copy()
-    df_temp['Market_Archetype'] = cluster_labels
+    valid_mask = labels != -1
+    X_valid = X_processed[valid_mask]
+    labels_valid = labels[valid_mask]
     
-    # Calculate median values per cluster to avoid heavy outlier skew
-    profile = df_temp.groupby('Market_Archetype').median().T
-    print("\\nMarket Archetype Profiles (Median Feature Values):")
-    display(profile)
+    if len(set(labels_valid)) < 2:
+        return {'silhouette': -1, 'davies_bouldin': -1, 'calinski': -1}
+    
+    n_total = X_valid.shape[0]
+    idx = np.random.choice(n_total, min(sample_size, n_total), replace=False)
+    
+    X_sample = X_valid[idx]
+    y_sample = labels_valid[idx]
+    
+    if hasattr(X_sample, 'toarray'):
+        X_sample = X_sample.toarray()
+    
+    # Metriken berechnen
+    sil_score = silhouette_score(X_sample, y_sample, random_state=42)
+    db_score = davies_bouldin_score(X_sample, y_sample)
+    ch_score = calinski_harabasz_score(X_sample, y_sample)
+    
+    print("\n--- Clustering Metrics ---")
+    print(f"Silhouette Score:      {sil_score:.4f} (Higher is better, max 1)")
+    print(f"Davies-Bouldin Index:  {db_score:.4f} (Lower is better, min 0)")
+    print(f"Calinski-Harabasz:     {ch_score:,.1f} (Higher is better)")
+    
+    return {'silhouette': sil_score, 'davies_bouldin': db_score, 'calinski': ch_score}
