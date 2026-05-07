@@ -7,16 +7,23 @@ from sklearn.metrics import (
     average_precision_score
 )
 
-def evaluate_regression(y_true, y_pred, n_features, is_log_transformed=True):
+def evaluate_regression(y_true, y_pred, n_features, is_log_transformed=True, target_type='ratio'):
     """
     Calculates regression metrics with a focus on robustness.
+    Includes dynamic handling for absolute financial values ('money') 
+    or budget deviations ('ratio').
     
     Domain Knowledge:
     - Median Absolute Error (MedAE) is preferred over MAE as contract prices 
       in TED data feature extreme outliers that would skew standard averages.
     """
-    y_t = np.expm1(y_true) if is_log_transformed else y_true
-    y_p = np.expm1(y_pred) if is_log_transformed else y_pred
+    if is_log_transformed:
+        # Ratios use standard log/exp, absolute money uses log1p/expm1
+        y_t = np.exp(y_true) if target_type == 'ratio' else np.expm1(y_true)
+        y_p = np.exp(y_pred) if target_type == 'ratio' else np.expm1(y_pred)
+    else:
+        y_t = y_true
+        y_p = y_pred
 
     mae = mean_absolute_error(y_t, y_p)
     medae = median_absolute_error(y_t, y_p)
@@ -26,13 +33,22 @@ def evaluate_regression(y_true, y_pred, n_features, is_log_transformed=True):
     # Adjust R-squared for feature count to identify potential over-specification
     adj_r2 = 1 - (1 - r2) * (len(y_t) - 1) / (len(y_t) - n_features - 1)
     
+    unit = "" if target_type == 'ratio' else "€"
+    
     print("\n--- Regression Results ---")
-    print(f"MedAE (Robust): €{medae:,.2f}")
-    print(f"MAE:            €{mae:,.2f}")
-    print(f"RMSE:           €{rmse:,.2f}")
+    if target_type == 'ratio':
+        print(f"MedAE (Robust): {medae:.3f} (approx. {medae*100:.1f} % points deviation)")
+        print(f"MAE:            {mae:.3f} (approx. {mae*100:.1f} % points deviation)")
+        print(f"RMSE:           {rmse:.3f}")
+    else:
+        print(f"MedAE (Robust): {unit}{medae:,.2f}")
+        print(f"MAE:            {unit}{mae:,.2f}")
+        print(f"RMSE:           {unit}{rmse:,.2f}")
+        
     print(f"Adj. R-squared: {adj_r2:.4f}")
     
     return {'medae': medae, 'adj_r2': adj_r2}
+
 
 def evaluate_classification(y_test: pd.Series, y_pred: np.ndarray, y_prob: np.ndarray = None):
     """
@@ -55,6 +71,7 @@ def evaluate_classification(y_test: pd.Series, y_pred: np.ndarray, y_prob: np.nd
         metrics['roc_auc'] = roc_auc
         
     return metrics
+
 
 def evaluate_clustering(X_processed, labels, sample_size=20000):
     """

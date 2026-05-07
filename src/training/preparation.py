@@ -1,8 +1,10 @@
 import pandas as pd
+import numpy as np
 from sklearn.model_selection import GroupShuffleSplit
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, FunctionTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
 
 def perform_group_split(df: pd.DataFrame, target_col: str, group_col: str, drop_cols: list, test_size: float = 0.2) -> tuple:
     """
@@ -33,23 +35,29 @@ def perform_group_split(df: pd.DataFrame, target_col: str, group_col: str, drop_
     print(f" -> Split successful. Train: {len(X_train):,} rows | Test: {len(X_test):,} rows.")
     return X_train, X_test, y_train, y_test, groups_train
 
-def prepare_clustering_data(df: pd.DataFrame, features: list) -> tuple:
+
+def build_preprocessor(categorical_cols: list, numeric_cols: list):
     """
-    Prepares data specifically for distance-based Unsupervised Learning (e.g., K-Means).
-    Since distance algorithms fail on NaNs and are biased by different scales 
-    (e.g., Days vs. Euros), we must impute and standardize.
+    Global, dynamic preprocessing pipeline used across all ML tasks
+    (Clustering, Classification, Regression).
+    
+    Domain-specific imputation (like 'MISSING' or 0) is assumed to be handled 
+    upstream in Notebook 05. This serves as the mathematical transformation engine 
+    and safety net for any unexpected NaNs.
     """
-    print("Preparing features for Unsupervised Clustering (Imputation & Scaling)...")
-    valid_cols = [c for c in features if c in df.columns]
-    X_raw = df[valid_cols].copy()
+    transformers = []
     
-    # Build a rigid preprocessing pipeline
-    pipeline = Pipeline([
-        ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', StandardScaler())
-    ])
-    
-    X_scaled = pipeline.fit_transform(X_raw)
-    
-    print(f" -> Scaled {len(valid_cols)} features for {len(X_scaled):,} observations.")
-    return pd.DataFrame(X_scaled, columns=valid_cols, index=df.index), pipeline
+    if numeric_cols:
+        transformers.append(('num', Pipeline([
+            ('imp', SimpleImputer(strategy='median')), 
+            ('log', FunctionTransformer(np.log1p)), 
+            ('scal', StandardScaler())
+        ]), numeric_cols))
+        
+    if categorical_cols:
+        transformers.append(('cat', Pipeline([
+            ('imp', SimpleImputer(strategy='most_frequent')),
+            ('ohe', OneHotEncoder(handle_unknown='ignore', drop='first'))
+        ]), categorical_cols))
+        
+    return ColumnTransformer(transformers=transformers, remainder='drop')
