@@ -7,7 +7,7 @@ from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
 from src.training.preparation import build_preprocessor
 
-def prepare_supervised_data(df: pd.DataFrame, target_col: str, group_col: str, feature_cols: list, test_size: float = 0.2):
+def prepare_classification_data(df: pd.DataFrame, target_col: str, group_col: str, feature_cols: list, test_size: float = 0.2):
     """
     Splits the dataset into training and testing subsets while respecting hierarchical boundaries.
     Procurement lots belonging to the same notice share identical macro-level features. 
@@ -31,7 +31,7 @@ def prepare_supervised_data(df: pd.DataFrame, target_col: str, group_col: str, f
     return X_train, X_test, y_train, y_test, groups_train
 
 
-def tune_supervised_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd.Series, 
+def tune_classification_model(X_train: pd.DataFrame, y_train: pd.Series, groups_train: pd.Series, 
                           categorical_cols: list, numeric_cols: list, model_name: str):
     """
     Executes hyperparameter tuning using group-aware cross-validation.
