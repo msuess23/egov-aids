@@ -3,7 +3,78 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, PrecisionRecallDisplay
+
+def plot_confusion_matrix_heatmap(y_test: pd.Series, y_pred: np.ndarray):
+    """
+    Visualizes the absolute counts of True Positives, False Positives, etc.
+    Provides immediate context on whether the cost-sensitive model overcompensated 
+    (producing too many False Positives for market failure).
+    """
+    cm = confusion_matrix(y_test, y_pred)
+    plt.figure(figsize=(6, 4))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False)
+    plt.title("Confusion Matrix: Market Failure Prediction")
+    plt.xlabel("Predicted Class (0 = Competitive, 1 = Market Failure)")
+    plt.ylabel("Actual Class (0 = Competitive, 1 = Market Failure)")
+    plt.tight_layout()
+    plt.show()
+
+def plot_pr_curve(y_test: pd.Series, y_prob: np.ndarray):
+    """
+    Plots the Precision-Recall Curve.
+    Essential for visualizing the trade-off between capturing all market failures (Recall) 
+    and ensuring predictions are reliable (Precision) within highly imbalanced datasets.
+    """
+    plt.figure(figsize=(6, 4))
+    display = PrecisionRecallDisplay.from_predictions(y_test, y_prob, name="Model")
+    display.ax_.set_title("Precision-Recall Curve (Minority Class Focus)")
+    plt.tight_layout()
+    plt.show()
+
+def plot_feature_importance(pipeline, feature_names_numeric: list, feature_names_categorical: list, top_n: int = 15):
+    """
+    Extracts and ranks the predictive drivers of the model.
+    Transforms the algorithmic rules back into economic insights, answering the core 
+    research question regarding which variables trigger single-bidding scenarios.
+    Note: Requires tree-based models (DecisionTree, RandomForest, XGBoost).
+    """
+    classifier = pipeline.named_steps['classifier']
+    preprocessor = pipeline.named_steps['preprocessor']
+    
+    if not hasattr(classifier, 'feature_importances_'):
+        print("Model does not support native feature importances.")
+        return
+        
+    ohe_features = []
+    if 'cat' in preprocessor.named_transformers_:
+        ohe = preprocessor.named_transformers_['cat']
+        ohe_features = list(ohe.get_feature_names_out(feature_names_categorical))
+        
+    all_features = feature_names_numeric + ohe_features
+    importances = classifier.feature_importances_
+    
+    if len(all_features) != len(importances):
+        print("Feature mismatch. Cannot plot importances.")
+        return
+        
+    df_imp = pd.DataFrame({'Feature': all_features, 'Importance': importances})
+    df_imp = df_imp.sort_values(by='Importance', ascending=False).head(top_n)
+    
+    plt.figure(figsize=(10, 6))
+    sns.barplot(
+        x='Importance', 
+        y='Feature', 
+        hue='Feature', 
+        data=df_imp, 
+        palette='viridis', 
+        legend=False
+    )
+    plt.title(f"Top {top_n} Predictors for Market Failure")
+    plt.xlabel("Relative Feature Importance")
+    plt.ylabel("Procurement Feature")
+    plt.tight_layout()
+    plt.show()
 
 def plot_cluster_profiles(df: pd.DataFrame, cluster_col: str, features: list):
     """
@@ -20,16 +91,6 @@ def plot_cluster_profiles(df: pd.DataFrame, cluster_col: str, features: list):
         axes[i].set_xlabel('Cluster ID')
         
     plt.tight_layout()
-    plt.show()
-
-def plot_confusion_matrix_heatmap(y_true, y_pred):
-    """Displays a linear heatmap of Type I and Type II errors."""
-    cm = confusion_matrix(y_true, y_pred)
-    plt.figure(figsize=(6, 5))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=True)
-    plt.title('Classification Error Matrix')
-    plt.ylabel('Actual')
-    plt.xlabel('Predicted')
     plt.show()
 
 def plot_regression_density(y_true, y_pred):
@@ -110,5 +171,66 @@ def plot_categorical_profiling_heatmap(df: pd.DataFrame, cluster_col: str, cat_c
     
     # Rotate x-labels for better readability of long category names
     plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    plt.show()
+
+def plot_grouped_feature_importance(pipeline, numeric_cols: list, categorical_cols: list):
+    """
+    Calculates and visualizes the aggregated feature importance for parent categories.
+    One-Hot-Encoding fragments the predictive weight of high-cardinality variables 
+    (e.g., ISO_COUNTRY_CODE) into multiple low-weight dummy variables. By summing 
+    the Gini importances of all derivative columns, the true global impact of the 
+    original macro-feature (e.g., Geography vs. Finance) is restored and visualized.
+    """
+    classifier = pipeline.named_steps['classifier']
+    preprocessor = pipeline.named_steps['preprocessor']
+    
+    if not hasattr(classifier, 'feature_importances_'):
+        print("Model does not support native feature importances.")
+        return
+        
+    # Extract One-Hot-Encoded feature names
+    ohe_features = []
+    if 'cat' in preprocessor.named_transformers_:
+        ohe = preprocessor.named_transformers_['cat']
+        ohe_features = list(ohe.get_feature_names_out(categorical_cols))
+        
+    all_features = numeric_cols + ohe_features
+    importances = classifier.feature_importances_
+    
+    if len(all_features) != len(importances):
+        print("Feature mismatch. Cannot map importances.")
+        return
+        
+    df_imp = pd.DataFrame({'Feature_OHE': all_features, 'Importance': importances})
+    
+    # Mapping derivative OHE columns back to their parent feature
+    def get_parent_feature(feature_name):
+        if feature_name in numeric_cols:
+            return feature_name
+        for cat in categorical_cols:
+            # Matches prefix generated by OneHotEncoder (e.g., "ISO_COUNTRY_CODE_")
+            if feature_name.startswith(cat + '_'):
+                return cat
+        return feature_name
+
+    df_imp['Parent_Feature'] = df_imp['Feature_OHE'].apply(get_parent_feature)
+    
+    # Aggregating importances by parent feature
+    df_grouped = df_imp.groupby('Parent_Feature')['Importance'].sum().reset_index()
+    df_grouped = df_grouped.sort_values(by='Importance', ascending=False)
+    
+    plt.figure(figsize=(10, 6))
+    sns.barplot(
+        x='Importance', 
+        y='Parent_Feature', 
+        hue='Parent_Feature', 
+        data=df_grouped, 
+        palette='magma', 
+        legend=False
+    )
+    plt.title("Aggregated Feature Importance (Macro Level)")
+    plt.xlabel("Total Relative Importance (Sum of OHE Variables)")
+    plt.ylabel("Parent Feature / Category")
     plt.tight_layout()
     plt.show()

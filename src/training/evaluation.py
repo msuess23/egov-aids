@@ -3,7 +3,8 @@ import numpy as np
 from sklearn.metrics import (
     mean_absolute_error, median_absolute_error, mean_squared_error, r2_score,
     balanced_accuracy_score, precision_score, recall_score, f1_score, silhouette_score,
-    davies_bouldin_score, calinski_harabasz_score
+    davies_bouldin_score, calinski_harabasz_score, classification_report, roc_auc_score, 
+    average_precision_score
 )
 
 def evaluate_regression(y_true, y_pred, n_features, is_log_transformed=True):
@@ -33,28 +34,27 @@ def evaluate_regression(y_true, y_pred, n_features, is_log_transformed=True):
     
     return {'medae': medae, 'adj_r2': adj_r2}
 
-def evaluate_classification(y_true, y_pred):
+def evaluate_classification(y_test: pd.Series, y_pred: np.ndarray, y_prob: np.ndarray = None):
     """
-    Calculates classification metrics for binary tasks.
-    
-    Domain Knowledge:
-    - Balanced Accuracy is critical as 'Market Failure' classes are often 
-      unbalanced (fewer competitive tenders than single bids).
+    Quantifies model performance with a strict focus on class imbalance metrics.
+    Global accuracy is highly misleading in imbalanced procurement datasets. 
+    The evaluation emphasizes Precision, Recall, and the Precision-Recall AUC (PR-AUC) 
+    to accurately measure the model's ability to detect the minority class (Single Bidding).
     """
-    results = {
-        'bal_acc': balanced_accuracy_score(y_true, y_pred),
-        'f1': f1_score(y_true, y_pred, zero_division=0),
-        'precision': precision_score(y_true, y_pred, zero_division=0),
-        'recall': recall_score(y_true, y_pred, zero_division=0)
-    }
+    print("--- Classification Report ---")
+    print(classification_report(y_test, y_pred))
     
-    print("\n--- Classification Results ---")
-    print(f"Balanced Acc: {results['bal_acc']:.4f}")
-    print(f"F1-Score:     {results['f1']:.4f}")
-    print(f"Precision:    {results['precision']:.4f}")
-    print(f"Recall:       {results['recall']:.4f}")
-    
-    return results
+    metrics = {}
+    if y_prob is not None:
+        # PR-AUC is the most robust metric for heavily imbalanced target distributions
+        pr_auc = average_precision_score(y_test, y_prob)
+        roc_auc = roc_auc_score(y_test, y_prob)
+        print(f"PR-AUC  (Precision-Recall Area Under Curve): {pr_auc:.4f}")
+        print(f"ROC-AUC (Receiver Operating Characteristic): {roc_auc:.4f}")
+        metrics['pr_auc'] = pr_auc
+        metrics['roc_auc'] = roc_auc
+        
+    return metrics
 
 def evaluate_clustering(X_processed, labels, sample_size=20000):
     """

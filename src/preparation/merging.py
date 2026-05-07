@@ -80,8 +80,9 @@ def compare_feature_consistency(df_master: pd.DataFrame, features: list) -> pd.D
 
 def prepare_final_ml_dataset(df_master: pd.DataFrame) -> pd.DataFrame:
     """
-    Cleans the master dataset by selecting specific targets and features,
-    removing Data Leakage (CAN duplicates), and dropping unnecessary IDs.
+    Cleans the master dataset by selecting specific targets and features.
+    Data cleaning (dropping NaNs) and feature engineering are deferred to the 
+    subsequent preparation and ML pipelines to strictly separate concerns.
     """
     print("\nPreparing final ML Dataset (Selecting Features & Targets)...")
     
@@ -112,11 +113,8 @@ def prepare_final_ml_dataset(df_master: pd.DataFrame) -> pd.DataFrame:
         'TOTAL_VALUE_EUR_CFC',
         'IS_FRAMEWORK_CFC',
         'COOPERATIVE_PURCHASING_CFC',
-        'IS_CRIT_M_CFC',
-        'IS_CRIT_L_CFC',
-        'IS_CONTRACT_W_CFC', 
-        'IS_CONTRACT_S_CFC',
-        'IS_CONTRACT_U_CFC',
+        'CRIT_CODE_CFC',
+        'TYPE_OF_CONTRACT_CFC',
         'NUTS_REGION_COUNT_CFC',
         'NUTS_LEVEL_CFC',
         'PREPARATION_DAYS'
@@ -126,10 +124,8 @@ def prepare_final_ml_dataset(df_master: pd.DataFrame) -> pd.DataFrame:
     cols_to_keep = [c for c in meta_cols + targets_can + features_cfc if c in df_master.columns]
     df_ml = df_master[cols_to_keep].copy()
     
-    # 3. Rename the _CFC columns back to their normal names for aesthetics
+    # 3. Rename columns explicitly for the ML phase
     rename_dict = {col: col.replace('_CFC', '') for col in features_cfc}
-    
-    # Rename Targets explicitly for the ML phase
     rename_dict['TOTAL_VALUE_EUR_CAN'] = 'TARGET_AWARD_VALUE_EUR'
     rename_dict['TOTAL_VALUE_EUR_CFC'] = 'ESTIMATED_VALUE_EUR'
     rename_dict['JOIN_NOTICE'] = 'ID_NOTICE'
@@ -137,16 +133,10 @@ def prepare_final_ml_dataset(df_master: pd.DataFrame) -> pd.DataFrame:
     
     df_ml = df_ml.rename(columns=rename_dict)
 
-    # 4. Compress high-cardinality Text-IDs into Integers
+    # 4. Compress high-cardinality Text-IDs into Integers for Report
     df_ml['ID_NOTICE'], _ = pd.factorize(df_ml['ID_NOTICE'])
     df_ml['ID_LOT'], _ = pd.factorize(df_ml['ID_LOT'])
     
-    # 5. Final Drop of Missing Values in TARGET variables
-    rows_before = len(df_ml)
-    df_ml = df_ml.dropna(subset=['NUMBER_OF_TENDERS', 'TARGET_AWARD_VALUE_EUR'])
-    rows_dropped = rows_before - len(df_ml)
-    
-    print(f" -> Dropped {rows_dropped:,} rows due to missing target variables.")
-    print(f" -> Final ML Dataset shape: {df_ml.shape}")
+    print(f" -> Merged ML Dataset shape: {df_ml.shape}")
     
     return df_ml

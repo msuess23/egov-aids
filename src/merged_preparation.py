@@ -4,8 +4,9 @@ import os
 
 def remove_logical_errors(df: pd.DataFrame, columns: list, min_val: float = 0.0) -> pd.DataFrame:
     """
-    Drops rows where values in specified columns fall below a logical minimum 
-    (e.g., time or money cannot be negative). Critical before log transformations.
+    Removes records with impossible negative values in temporal or financial attributes.
+    Procurement data frequently contains entry errors where durations or values are 
+    negative. These must be purged before any logarithmic or statistical analysis.
     """
     print(f"Removing logical errors (Dropping values < {min_val})...")
     initial_rows = len(df)
@@ -24,146 +25,94 @@ def remove_logical_errors(df: pd.DataFrame, columns: list, min_val: float = 0.0)
     return df_cleaned
 
 
-def remove_extreme_outliers(df: pd.DataFrame, columns: list, upper_quantile: float = 0.999) -> pd.DataFrame:
+def _calculate_log_iqr_threshold(series: pd.Series, k_factor: float = 3.0) -> float:
     """
-    Removes extreme outliers by dropping rows that fall above a specified 
-    high quantile (e.g., 99.9th percentile).
+    Calculates the outlier threshold in a log-transformed space.
+    Financial data and tender counts scale across multiple orders of magnitude (heavy tails).
+    A standard linear IQR would incorrectly classify legitimate large-scale projects as 
+    outliers. Logarithmic scaling compresses these magnitudes, allowing the IQR 
+    to identify only extreme data entry errors (e.g., values in the trillions).
     """
-    print(f"Applying quantile trimming (Dropping top {100 - upper_quantile*100:.2f}%)...")
+    log_series = np.log1p(series.dropna())
+    q1 = log_series.quantile(0.25)
+    q3 = log_series.quantile(0.75)
+    iqr = q3 - q1
+    log_threshold = q3 + (k_factor * iqr)
+    return np.expm1(log_threshold)
+
+def _calculate_standard_iqr_threshold(series: pd.Series, k_factor: float = 3.0) -> float:
+    """
+    Calculates the outlier threshold in linear space.
+    Used for variables that scale linearly (e.g., preparation days, region counts). 
+    These attributes lack the exponential spread of financial data, making a 
+    standard Tukey IQR sufficient for outlier detection.
+    """
+    q1 = series.quantile(0.25)
+    q3 = series.quantile(0.75)
+    iqr = q3 - q1
+    return q3 + (k_factor * iqr)
+
+
+def remove_extreme_outliers(df: pd.DataFrame, columns: list, k_factor: float = 3.0, method: str = 'log') -> pd.DataFrame:
+    """
+    Removes extreme outliers (Trimming) based on mathematically derived boundaries.
+    Trimming is applied to target variables to ensure that the ground truth for 
+    training is not corrupted by severe data entry errors.
+    """
+    print(f"Applying mathematical trimming ({method.capitalize()}-IQR, k={k_factor})...")
     initial_rows = len(df)
     valid_cols = [c for c in columns if c in df.columns]
     
     mask = pd.Series(True, index=df.index)
     for col in valid_cols:
-        cutoff_val = df[col].quantile(upper_quantile)
+        if method == 'log':
+            cutoff_val = _calculate_log_iqr_threshold(df[col], k_factor)
+        else:
+            cutoff_val = _calculate_standard_iqr_threshold(df[col], k_factor)
+            
         col_mask = (df[col] <= cutoff_val) | (df[col].isna())
         mask = mask & col_mask
         
     df_cleaned = df[mask].copy()
     dropped_count = initial_rows - len(df_cleaned)
-    
-    print(f" -> Dropped {dropped_count:,} rows containing extreme upper outliers.")
+    print(f" -> Dropped {dropped_count:,} rows exceeding mathematical {method.capitalize()}-IQR boundaries.")
     return df_cleaned
 
 
-def winsorize_features(df: pd.DataFrame, columns: list, upper_quantile: float = 0.99) -> pd.DataFrame:
+def winsorize_features(df: pd.DataFrame, columns: list, k_factor: float = 3.0, method: str = 'log') -> pd.DataFrame:
     """
-    Caps extreme values in input features at a specified quantile instead of dropping.
+    Caps extreme values (Winsorizing) in input features.
+    Capping preserves the record while limiting the influence of extreme values on 
+    model training (e.g., tree splits). This prevents the model from overfitting 
+    on statistical anomalies while maintaining a high sample size.
     """
-    print(f"Winsorizing features (Capping at the {upper_quantile*100:.1f}th percentile)...")
+    print(f"Winsorizing features (Capping via {method.capitalize()}-IQR, k={k_factor})...")
     valid_cols = [c for c in columns if c in df.columns]
     
     for col in valid_cols:
-        cutoff_val = df[col].quantile(upper_quantile)
+        if method == 'log':
+            cutoff_val = _calculate_log_iqr_threshold(df[col], k_factor)
+        else:
+            cutoff_val = _calculate_standard_iqr_threshold(df[col], k_factor)
+            
         capped_count = (df[col] > cutoff_val).sum()
         df[col] = df[col].clip(upper=cutoff_val)
         
         if capped_count > 0:
-            print(f"  -> {col}: Capped {capped_count:,} extreme values at {cutoff_val:,.2f}.")
+            print(f"  -> {col}: Capped {capped_count:,} values at mathematically derived max ({cutoff_val:,.2f}).")
             
     return df
 
 
-def apply_log1p_transformation(df: pd.DataFrame, columns: list) -> pd.DataFrame:
+def drop_missing_targets(df: pd.DataFrame, target_columns: list) -> pd.DataFrame:
     """
-    Applies a natural logarithm transformation (log(1+x)) to right-skewed 
-    numerical and financial features. Overwrites the original columns.
+    Purges records missing critical labels.
+    Machine learning requires verified outcomes (ground truth) for training and evaluation.
+    Records without tender counts or award values are analytically unusable.
     """
-    print("Applying log1p transformation (Overwriting original columns)...")
-    valid_cols = [c for c in columns if c in df.columns]
-    
-    for col in valid_cols:
-        # Overwrite the column in-place
-        df[col] = np.log1p(df[col])
-        print(f"  -> Log-transformed: {col}")
-        
-    return df
-
-def encode_categorical_features(df: pd.DataFrame, columns: list, mapping_file: str = "reports/encoding.md") -> pd.DataFrame:
-    """
-    Converts categorical text columns into integer-based IDs (Label Encoding) 
-    and generates a Markdown reference file for traceability (reverting).
-    
-    Args:
-        df (pd.DataFrame): The dataset.
-        columns (list): List of column names to encode.
-        mapping_file (str): Path to the markdown file where mappings are saved.
-        
-    Returns:
-        pd.DataFrame: Dataframe with integer-encoded categorical features.
-    """
-    print(f"Encoding categorical features and generating reference: {mapping_file}...")
-    valid_cols = [c for c in columns if c in df.columns]
-    
-    # Ensure the directory for the report exists
-    os.makedirs(os.path.dirname(mapping_file), exist_ok=True)
-    
-    # Start building the Markdown content
-    mapping_content = "# Categorical Encoding Reference\n\n"
-    mapping_content += "This file contains the mapping between original text values and their integer-encoded IDs.\n\n"
-
-    for col in valid_cols:
-        # 1. Convert to pandas category to establish a stable order
-        df[col] = df[col].astype('category')
-        categories = df[col].cat.categories
-        
-        # 2. Build the Markdown table for this feature
-        mapping_content += f"## Feature: {col}\n"
-        mapping_content += "| Encoded ID | Original Value |\n"
-        mapping_content += "| :--- | :--- |\n"
-        
-        for i, original_value in enumerate(categories):
-            mapping_content += f"| {i} | {original_value} |\n"
-        mapping_content += "\n"
-        
-        # 3. Apply the encoding (Codes are 0, 1, 2... and -1 for NaNs)
-        codes = df[col].cat.codes
-        
-        # 4. Restore NaNs: XGBoost handles np.nan better than -1
-        df[col] = np.where(codes == -1, np.nan, codes)
-        
-        print(f"  -> {col}: Encoded {len(categories)} categories.")
-
-    # Write the mapping file
-    with open(mapping_file, "w", encoding="utf-8") as f:
-        f.write(mapping_content)
-        
-    print(f" -> Encoding complete. Mapping saved to '{mapping_file}'.")
-    return df
-
-def impute_missing_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Handles missing values using targeted strategies:
-    - Median for numeric inputs (< 5% missing)
-    - Mode for categorical/binary inputs
-    - Flagging for variables with massive missingness (> 40%)
-    """
-    print("Imputing missing values for input features...")
-    
-    # 1. Median Imputation (Numeric)
-    median_cols = ['DURATION', 'PREPARATION_DAYS', 'NUTS_LEVEL']
-    for col in median_cols:
-        if col in df.columns:
-            med_val = df[col].median()
-            missing_count = df[col].isna().sum()
-            df[col] = df[col].fillna(med_val)
-            if missing_count > 0:
-                print(f"  -> {col}: Filled {missing_count:,} NaNs with Median ({med_val:.2f})")
-
-    # 2. Mode Imputation (Categorical/Binary)
-    mode_cols = ['B_EU_FUNDS', 'B_RECURRENT_PROCUREMENT', 'TOP_TYPE']
-    for col in mode_cols:
-        if col in df.columns:
-            mode_val = df[col].mode()[0]
-            missing_count = df[col].isna().sum()
-            df[col] = df[col].fillna(mode_val)
-            if missing_count > 0:
-                print(f"  -> {col}: Filled {missing_count:,} NaNs with Mode ({mode_val})")
-
-    # 3. Explicit Missing Flag for massive gaps
-    if 'ESTIMATED_VALUE_EUR' in df.columns:
-        # Create a flag: 1 if missing, 0 if not
-        df['ESTIMATED_VALUE_MISSING'] = df['ESTIMATED_VALUE_EUR'].isna().astype(int)
-        print("  -> ESTIMATED_VALUE_EUR: Kept NaNs for XGBoost, but generated 'ESTIMATED_VALUE_MISSING' flag.")
-
-    return df
+    print(f"Dropping rows with missing critical target variables: {target_columns}...")
+    initial_rows = len(df)
+    df_cleaned = df.dropna(subset=target_columns).copy()
+    dropped_count = initial_rows - len(df_cleaned)
+    print(f" -> Dropped {dropped_count:,} unusable rows.")
+    return df_cleaned

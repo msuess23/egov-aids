@@ -59,38 +59,3 @@ def standardize_categorical_features(df: pd.DataFrame, columns: list) -> pd.Data
         print(f" -> Standardized {len(existing_cols)} features into categorical format.")
         
     return df
-
-def create_one_hot_encodings(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Transforms low-cardinality categorical variables into binary dummy variables 
-    to ensure mathematical compatibility with machine learning algorithms.
-    
-    Args:
-        df (pd.DataFrame): The dataset.
-        
-    Returns:
-        pd.DataFrame: Dataframe with new binary dummy columns and source columns removed.
-    """
-    encoding_map = {
-        'TYPE_OF_CONTRACT': {'prefix': 'IS_CONTRACT', 'valid_suffixes': ('U', 'S', 'W')},
-        'CRIT_CODE': {'prefix': 'IS_CRIT', 'valid_suffixes': ('L', 'M')}
-    }
-    
-    encoded_count = 0
-    
-    for col, config in encoding_map.items():
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip().str.upper()
-            dummies = pd.get_dummies(df[col], prefix=config['prefix']).astype(int)
-            
-            # Keep only valid expected columns to prevent garbage data from creating new features
-            valid_cols = [c for c in dummies.columns if c.endswith(config['valid_suffixes'])]
-            df = pd.concat([df, dummies[valid_cols]], axis=1)
-            df = df.drop(columns=[col])
-            
-            encoded_count += len(valid_cols)
-
-    if encoded_count > 0:
-        print(f" -> Generated {encoded_count} binary one-hot encoded features.")
-
-    return df
